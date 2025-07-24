@@ -65,15 +65,24 @@ python launcher.py
 
 ## Dependencies
 
-- Python 3.8+
-- numpy
-- pandas
-- scikit-learn
-- tensorflow (Keras API)
+Python >= 3.8
+
+Required packages:
+- numpy          # vectorized operations and matrix math
+- pandas         # CSV parsing and data handling
+- scikit-learn   # preprocessing, metrics, data balancing
+- tensorflow==2.10.0  # core ML framework with Keras API, GPU-supported
 
 Install dependencies:
 ```bash
 pip install -r requirements.txt
+```
+
+## Recommended: use a virtual environment to isolate dependencies
+```bash
+python -m venv .venv
+source .venv/bin/activate      # on Unix/Mac
+.\.venv\Scripts\activate       # on Windows
 ```
 
 ## Example metrics
@@ -89,7 +98,7 @@ recall : 0.8342
 neg_recall : 0.9456
 ```
 
-## PS
+## P.S.
 
 To train the model, data from the repository were used:
 https://github.com/BioinformaticsLabAtMUN/BacTermFinder
