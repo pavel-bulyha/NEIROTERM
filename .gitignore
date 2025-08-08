@@ -20,3 +20,11 @@ __pycache__/
 # Ignore training data directory
 TrainData/
 ```
+
+# Ignore logs directory
+logs/
+```
+
+# Ignore saved_models directory
+saved_models/
+```
