@@ -28,3 +28,6 @@ logs/
 # Ignore saved_models directory
 saved_models/
 ```
+# Ignore optuna_perceptron.db
+optuna_perceptron.db
+```
