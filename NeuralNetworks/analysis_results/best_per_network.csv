@@ -1,0 +1,2 @@
+network,neg,pos,ratio,mode,h1,h2,lr,bs,best_epoch,best_val_recall,best_val_neg_recall,best_balanced_acc
+FullyConnectedPerceptron,1,5,5.0,weightedBCE,512,64,0.0006,64,0,0.6928024291992188,0.8562402129173279,0.7745213210582733
