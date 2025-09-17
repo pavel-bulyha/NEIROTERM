@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import multiprocessing
 import numpy as np
 import tensorflow as tf
@@ -26,13 +27,30 @@ tf.config.threading.set_inter_op_parallelism_threads(num_cpu_cores)
 tf.config.threading.set_intra_op_parallelism_threads(num_cpu_cores)
 
 # 2) Global constants & explicit Optuna storage
-EPOCHS    = 50
-BASE_DIR  = Path(__file__).parent.resolve()
-DB_PATH   = BASE_DIR / "optuna_perceptron.db"
+EPOCHS     = 50
+FIXED_H2   = 100
+BASE_DIR   = Path(__file__).parent.resolve()
+DB_PATH    = BASE_DIR / "optuna_perceptron.db"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 STORAGE_URL = f"sqlite:///{DB_PATH}"
 
 print(f"Optuna storage: {DB_PATH}")
+
+# 2a) Prepare paired dropout lists
+drop1_values = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+drop2_values = np.linspace(0.0, 0.3, num=len(drop1_values)).tolist()
+
+# 2b) Custom CSVLogger with global epoch counter
+class EpochCSVLogger(CSVLogger):
+    def __init__(self, filename, **kwargs):
+        super().__init__(filename, **kwargs)
+        self.global_epoch = 0
+
+    def on_epoch_end(self, epoch, logs=None):
+        self.global_epoch += 1
+        logs = {} if logs is None else dict(logs)
+        logs['epoch'] = self.global_epoch
+        super().on_epoch_end(epoch, logs)
 
 @register_model("PerceptronOptuna")
 def PerceptronOptunaCPU(data_csv: str, use_weighted_bce: bool):
@@ -51,15 +69,14 @@ def PerceptronOptunaCPU(data_csv: str, use_weighted_bce: bool):
     # 4) Loss fn
     if use_weighted_bce:
         labels = y_train.numpy().flatten() # type: ignore
-        neg, pos = np.bincount(labels, minlength=2)
+        neg, pos   = np.bincount(labels, minlength=2)
         pos_weight = neg / (pos + K.epsilon())
-        loss_fn = weighted_BCE(pos_weight)
+        loss_fn    = weighted_BCE(pos_weight)
     else:
         loss_fn = "binary_crossentropy"
 
     # 5) Hyper-space & dirs
     h1_list = [64, 128, 256, 512]
-    h2_list = [32, 64, 128, 256]
     lr_list = np.logspace(-4, -2, 5).tolist()
     bs_list = [16, 32, 64, 128]
 
@@ -73,21 +90,29 @@ def PerceptronOptunaCPU(data_csv: str, use_weighted_bce: bool):
 
     # 6) Objective with per-epoch logging & model save
     def objective(trial: optuna.Trial) -> float:
-        h1 = trial.suggest_categorical("h1", h1_list)
-        h2 = trial.suggest_categorical("h2", h2_list)
-        lr = trial.suggest_loguniform("lr", lr_list[0], lr_list[-1])
-        bs = trial.suggest_categorical("bs", bs_list)
+        # pick index to pair dropout1 & dropout2
+        idx       = trial.suggest_int("drop_idx", 0, len(drop1_values) - 1)
+        dropout1  = drop1_values[idx]
+        dropout2  = drop2_values[idx]
+
+        h1  = trial.suggest_categorical("h1", h1_list)
+        lr  = trial.suggest_loguniform("lr", lr_list[0], lr_list[-1])
+        bs  = trial.suggest_categorical("bs", bs_list)
+        h2  = FIXED_H2
 
         # build datasets
         train_ds = (
             tf.data.Dataset
               .from_tensor_slices((X_train, y_train))
-              .shuffle(10_000).batch(bs).prefetch(AUTOTUNE)
+              .shuffle(10_000)
+              .batch(bs)
+              .prefetch(AUTOTUNE)
         )
         val_ds = (
             tf.data.Dataset
               .from_tensor_slices((X_val, y_val))
-              .batch(bs).prefetch(AUTOTUNE)
+              .batch(bs)
+              .prefetch(AUTOTUNE)
         )
 
         # optimizer + model
@@ -99,7 +124,9 @@ def PerceptronOptunaCPU(data_csv: str, use_weighted_bce: bool):
             tf.keras.layers.Input((seq_len, vocab_size)),
             tf.keras.layers.Flatten(),
             tf.keras.layers.Dense(h1, activation="relu"),
+            tf.keras.layers.Dropout(dropout1),
             tf.keras.layers.Dense(h2, activation="relu"),
+            tf.keras.layers.Dropout(dropout2),
             tf.keras.layers.Dense(1, activation="sigmoid", dtype="float32"),
         ])
         model.compile(
@@ -120,15 +147,19 @@ def PerceptronOptunaCPU(data_csv: str, use_weighted_bce: bool):
             ]
         )
 
-        # CSVLogger: append=True to save all epochs in sequence
-        lr_str = f"{lr:.0e}"
-        log_file = logs_dir / f"{stem}_{mode}_h1{h1}_h2{h2}_lr{lr_str}_bs{bs}.tsv"
-        logger   = CSVLogger(str(log_file), separator="\t", append=True)
+        # dropout strings for filenames
+        drop1_str = f"drop1{int(dropout1*100)}"
+        drop2_str = f"drop2{int(dropout2*100)}"
+        lr_str    = f"{lr:.0e}"
+
+        # log file and model folder names include h2 and dropouts
+        log_file = logs_dir / f"{stem}_{mode}_h1{h1}_h2{h2}_{drop1_str}_{drop2_str}_lr{lr_str}_bs{bs}.tsv"
+        trial_folder = models_dir / f"{stem}_{mode}_h1{h1}_h2{h2}_{drop1_str}_{drop2_str}_lr{lr_str}_bs{bs}"
+
+        logger = EpochCSVLogger(str(log_file), separator="\t", append=True)
+        trial_folder.mkdir(exist_ok=True)
 
         best_rec = 0.0
-        # for each epoch: log, prune, and save the model
-        trial_folder = models_dir / f"{stem}_{mode}_h1{h1}_h2{h2}_lr{lr_str}_bs{bs}"
-        trial_folder.mkdir(exist_ok=True)
         for epoch in range(1, EPOCHS + 1):
             hist = model.fit(
                 train_ds,
@@ -140,12 +171,10 @@ def PerceptronOptunaCPU(data_csv: str, use_weighted_bce: bool):
             val_rec = hist.history["val_recall"][-1] # type: ignore
             best_rec = max(best_rec, val_rec)
 
-            # report + prune
             trial.report(val_rec, step=epoch)
             if trial.should_prune():
                 raise TrialPruned()
 
-            # save model this epoch
             epoch_path = trial_folder / f"epoch_{epoch:02d}.h5"
             model.save(str(epoch_path))
 
