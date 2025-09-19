@@ -21,8 +21,16 @@ NeuralNetworks/
 │ ├── all_results.csv
 │ ├── best_per_network.csv
 │ └── overall_best.csv
+├── ConvolutionalNeuralNetwork/
+│ ├── CNN.py
+│ ├── logs/
+│ └── saved_models/
 ├── FullyConnectedPerceptron/
 │ ├── Perceptron.py
+│ ├── logs/
+│ └── saved_models/
+├── RecurrentNeuralNetwork/
+│ ├── RNN.py
 │ ├── logs/
 │ └── saved_models/
 └── utils/
@@ -39,11 +47,13 @@ TrainData/
     └── BTFTrainData/ (folder with training data)
 ```
 
-- **launcher.py** — entry point, automatically imports all models and runs them on all CSV files from the `../TrainData` folder.
+- **launcher.py** — entry point, automatically imports all models, displays available models with numbers, allows user to select specific models or run all, and runs selected models on all CSV files from the `../TrainData` folder.
 - **analyze_results.py** — script for analyzing training logs from neural networks, parsing hyperparameters and metrics, generating plots and summary CSV files with best results per network and overall.
 - **analysis_plots/** — directory containing generated plots for visualizing analysis results, such as balanced accuracy comparisons, hyperparameter correlations, and recall relationships.
 - **analysis_results/** — directory with CSV files containing aggregated analysis data: all results, best per network, and overall best configuration.
-- **FullyConnectedPerceptron/** — example implementation of MLP model (Perceptron) for binary classification.
+- **ConvolutionalNeuralNetwork/** — implementation of Convolutional Neural Network (CNN) for sequence classification.
+- **FullyConnectedPerceptron/** — implementation of Multi-Layer Perceptron (MLP) model for binary classification.
+- **RecurrentNeuralNetwork/** — implementation of Recurrent Neural Network (RNN) for sequence data.
 - **utils/** — auxiliary modules:
   - `DataUtils.py` — data preparation and encoding.
   - `WeightedBCE.py` — weighted BCE loss function for working with unbalanced classes.
@@ -78,7 +88,8 @@ return {"accuracy": ..., "precision": ...}
 python launcher.py
 ```
 
-- The script will automatically find all models and all CSV files (including nested ones), start training with two loss function modes: regular BCE and weighted BCE (`pos_weight = neg / pos`).
+- The script will automatically find all registered models, display them with numbers, and prompt the user to select specific models (by entering numbers separated by ';') or run all models (by entering 'all').
+- Selected models will be run on all CSV files (including nested ones) from the `../TrainData` folder, with two loss function modes: regular BCE and weighted BCE (`pos_weight = neg / pos`).
 - For each model and each file, training logs (TSV) and weights (H5) are saved in the corresponding model folder.
 - In case of errors (e.g. missing data or model), an informative message is displayed.
 
@@ -107,10 +118,15 @@ source .venv/bin/activate      # on Unix/Mac
 .\.venv\Scripts\activate       # on Windows
 ```
 
-## Example metrics
+## Example output
 
 ```
-Found models: ['Perceptron']
+Available models:
+1. Perceptron
+2. CNN
+3. RNN
+Enter model numbers separated by ';' or 'all' to run all: 1;3
+Selected models: ['Perceptron', 'RNN']
 === Data file: TrainData/example.csv ===
 --- Running Perceptron [BCE] ---
 Final metrics:
@@ -118,6 +134,12 @@ accuracy : 0.9123
 precision : 0.8765
 recall : 0.8342
 neg_recall : 0.9456
+--- Running RNN [BCE] ---
+Final metrics:
+accuracy : 0.9234
+precision : 0.8876
+recall : 0.8453
+neg_recall : 0.9567
 ```
 
 ## P.S.

@@ -34,7 +34,29 @@ if __name__ == "__main__":
     if not models:
         print("No models registered. Nothing to run.")
         sys.exit(0)
-    print("Found models:", models)
+
+    # Display models with numbers
+    print("Available models:")
+    for i, model in enumerate(models, 1):
+        print(f"{i}. {model}")
+
+    # Get user input
+    user_input = input("Enter model numbers separated by ';' or 'all' to run all: ").strip()
+
+    if user_input.lower() == "all":
+        selected_models = models
+    else:
+        try:
+            indices = [int(x.strip()) - 1 for x in user_input.split(";")]
+            selected_models = [models[i] for i in indices if 0 <= i < len(models)]
+            if not selected_models:
+                print("No valid models selected.")
+                sys.exit(0)
+        except ValueError:
+            print("Invalid input. Please enter numbers separated by ';' or 'all'.")
+            sys.exit(0)
+
+    print(f"Selected models: {selected_models}")
 
     # 1) Folder with CSV files for training
     train_root = ROOT.parent / "TrainData"
@@ -50,7 +72,7 @@ if __name__ == "__main__":
 
     for data_file in csv_files:
         print(f"\n=== Data file: {data_file} ===")
-        for model_name in models:
+        for model_name in selected_models:
             run_fn = get_model(model_name)
             for use_weighted in (False, True):
                 mode = "weightedBCE" if use_weighted else "BCE"
