@@ -15,16 +15,6 @@ from utils import DataUtils, weighted_BCE, register_model
 from optuna.pruners import MedianPruner
 from optuna.exceptions import TrialPruned
 
-# Force CPU mode to avoid cuDNN issues
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-
-# 0) GPU & mixed-precision setup
-gpus = tf.config.list_physical_devices("GPU")
-if gpus:
-    for gpu in gpus:
-        tf.config.experimental.set_memory_growth(gpu, True)
-    mixed_precision.set_global_policy("mixed_float16")
-
 # 1) CPU threading optimization
 num_cpu_cores = multiprocessing.cpu_count()
 tf.config.threading.set_inter_op_parallelism_threads(num_cpu_cores)
@@ -67,8 +57,46 @@ def neg_recall_metric(yt, yp):
         (tf.reduce_sum(tf.subtract(one, yt_float)) + K.epsilon())
     )
 
-@register_model("CNNOptuna")
+@register_model("CNNOptunaOriginal")
 def CNNOptunaCPU(data_csv: str, use_weighted_bce: bool):
+    print("\n" + "="*60)
+    print("🎥 CNN GPU INITIALIZATION")
+    print("="*60)
+
+    # GPU setup inside function with automatic fallback
+    gpus = tf.config.list_physical_devices("GPU")
+    print(f"\n📊 Available devices:")
+    print(f"   CPU devices: {len(tf.config.list_physical_devices('CPU'))}")
+    print(f"   GPU devices: {len(gpus)}")
+
+    if gpus:
+        print(f"\n🎮 GPU DEVICES DETECTED:")
+        for i, gpu in enumerate(gpus):
+            print(f"   GPU {i}: {gpu.name}")
+            try:
+                gpu_details = tf.config.experimental.get_device_details(gpu)
+                print(f"         Device: {gpu_details.get('device_name', 'Unknown')}")
+                print(f"         Compute capability: {gpu_details.get('compute_capability', 'Unknown')}")
+            except:
+                print("         Details: Not available")
+
+        print(f"\n⚙️  GPU Configuration:")
+        print("   - Memory growth: ENABLED (dynamic allocation)")
+        print("   - Mixed precision: ENABLED (for CNN performance)")
+
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        mixed_precision.set_global_policy("mixed_float16")
+
+        print("   - Status: ✅ GPU READY FOR TRAINING")
+    else:
+        print("\n❌ NO GPU DEVICES FOUND")
+        print("   - Training will use CPU")
+        print("   - Performance may be slower")
+
+    print(f"\n🎯 Training mode: {'Weighted BCE' if use_weighted_bce else 'Standard BCE'}")
+    print("="*60 + "\n")
+
     # 3) Load & preprocess
     data_file = Path(data_csv)
     if not data_file.exists():
@@ -103,16 +131,35 @@ def CNNOptunaCPU(data_csv: str, use_weighted_bce: bool):
 
     # 6) Objective with per-epoch logging & model save
     def objective(trial: optuna.Trial) -> float:
-        # pick index to pair dropout_conv & dropout_dense
-        idx       = trial.suggest_int("drop_idx", 0, len(drop1_values) - 1)
-        dropout_conv  = drop_conv_values[idx]
-        dropout_dense  = drop_dense_values[idx]
+        # Force GPU usage
+        if gpus:
+            with tf.device('/GPU:0'):
+                return _objective_impl(trial)
+        else:
+            return _objective_impl(trial)
 
-        kernel_size  = trial.suggest_categorical("kernel_size", [10,20,30,40,50])
-        stride  = trial.suggest_categorical("stride", [1,2,4,6,8,10])
+    def _objective_impl(trial: optuna.Trial) -> float:
+        # Filter kernel_size options based on seq_len
+        kernel_opts = [k for k in (10,20,30,40,50) if k < seq_len]
+        kernel_size = trial.suggest_categorical("kernel_size", kernel_opts)
+
+        # Compute maximum allowed stride and filter stride options
+        max_stride  = seq_len - kernel_size
+        stride_opts = [s for s in (1,2,4,6,8,10) if s <= max_stride]
+        stride      = trial.suggest_categorical("stride", stride_opts)
+
+        # Keep the paired-dropout logic exactly as is
+        idx           = trial.suggest_int("drop_idx", 0, len(drop1_values)-1)
+        dropout_conv  = drop_conv_values[idx]
+        dropout_dense = drop_dense_values[idx]
+
         lr  = trial.suggest_float("lr", 1e-5, 1e-2, log=True)
         bs  = trial.suggest_categorical("bs", bs_list)
         output_length = (seq_len - kernel_size) // stride + 1
+
+        if output_length < 1:
+            # prune any trial that yields a non-positive output length
+            raise TrialPruned()
 
         # build datasets
         train_ds = (
@@ -134,6 +181,15 @@ def CNNOptunaCPU(data_csv: str, use_weighted_bce: bool):
         if gpus:
             optimizer = mixed_precision.LossScaleOptimizer(optimizer)
 
+        print(f"\n🎥 Trial {trial.number} - TRAINING START")
+        print(f"   Architecture: Input({seq_len},{vocab_size}) → Conv1D({kernel_size},{stride}) → Dense({output_length}) → Output(1)")
+        print(f"   Hyperparameters: LR={lr:.2e}, Batch={bs}, DropoutConv={dropout_conv}, DropoutDense={dropout_dense}")
+        print(f"   Dataset: {len(X_train)} train, {len(X_val)} validation samples")
+
+        # Show current device context
+        current_device = '/GPU:0' if gpus else '/CPU:0'
+        print(f"   Device context: {current_device}")
+
         model = tf.keras.Sequential([
             tf.keras.layers.Input((seq_len, vocab_size)),
             tf.keras.layers.Conv1D(filters=1, kernel_size=kernel_size, strides=stride, activation="relu", padding="valid"),
@@ -143,6 +199,10 @@ def CNNOptunaCPU(data_csv: str, use_weighted_bce: bool):
             tf.keras.layers.Dropout(dropout_dense),
             tf.keras.layers.Dense(1, activation="sigmoid", dtype="float32"),
         ])
+
+        # Build model to initialize weights
+        model.build((None, seq_len, vocab_size))
+
         model.compile(
             optimizer=optimizer,
             loss=loss_fn,
@@ -153,6 +213,15 @@ def CNNOptunaCPU(data_csv: str, use_weighted_bce: bool):
                 MeanMetricWrapper(neg_recall_metric, name="neg_recall")
             ]
         )
+
+        # Check device placement after compilation
+        if len(model.weights) > 0:
+            weight_device = model.weights[0].device
+            device_type = "GPU" if "GPU" in str(weight_device) else "CPU"
+            print(f"   ✅ Model initialized on: {weight_device} ({device_type})")
+            print(f"   📊 Model parameters: {sum([tf.size(w).numpy() for w in model.weights]):,}")
+        else:
+            print("   ⚠️  Model has no weights")
 
         # dropout strings for filenames
         dropconv_str = f"dropconv{int(dropout_conv*100)}"

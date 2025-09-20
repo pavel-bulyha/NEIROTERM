@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import multiprocessing
 import numpy as np
+import os
 import tensorflow as tf
 import optuna
 
@@ -14,12 +15,7 @@ from utils import DataUtils, weighted_BCE, register_model
 from optuna.pruners import MedianPruner
 from optuna.exceptions import TrialPruned
 
-# 0) GPU & mixed-precision setup
-gpus = tf.config.list_physical_devices("GPU")
-if gpus:
-    for gpu in gpus:
-        tf.config.experimental.set_memory_growth(gpu, True)
-    mixed_precision.set_global_policy("mixed_float16")
+# GPU setup will be done inside the function to avoid import-time issues
 
 # 1) CPU threading optimization
 num_cpu_cores = multiprocessing.cpu_count()
@@ -54,6 +50,44 @@ class EpochCSVLogger(CSVLogger):
 
 @register_model("PerceptronOptuna")
 def PerceptronOptunaCPU(data_csv: str, use_weighted_bce: bool):
+    print("\n" + "="*60)
+    print("🤖 PERCEPTRON GPU INITIALIZATION")
+    print("="*60)
+
+    # GPU setup inside function
+    gpus = tf.config.list_physical_devices("GPU")
+    print(f"\n📊 Available devices:")
+    print(f"   CPU devices: {len(tf.config.list_physical_devices('CPU'))}")
+    print(f"   GPU devices: {len(gpus)}")
+
+    if gpus:
+        print(f"\n🎮 GPU DEVICES DETECTED:")
+        for i, gpu in enumerate(gpus):
+            print(f"   GPU {i}: {gpu.name}")
+            # Try to get GPU memory info
+            try:
+                gpu_details = tf.config.experimental.get_device_details(gpu)
+                print(f"         Device: {gpu_details.get('device_name', 'Unknown')}")
+                print(f"         Compute capability: {gpu_details.get('compute_capability', 'Unknown')}")
+            except:
+                print("         Details: Not available")
+
+        print(f"\n⚙️  GPU Configuration:")
+        print("   - Memory growth: ENABLED (dynamic allocation)")
+        print("   - Mixed precision: DISABLED (for compatibility)")
+
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        # mixed_precision.set_global_policy("mixed_float16")  # Disabled for compatibility testing
+
+        print("   - Status: ✅ GPU READY FOR TRAINING")
+    else:
+        print("\n❌ NO GPU DEVICES FOUND")
+        print("   - Training will use CPU")
+        print("   - Performance may be slower")
+
+    print(f"\n🎯 Training mode: {'Weighted BCE' if use_weighted_bce else 'Standard BCE'}")
+    print("="*60 + "\n")
     # 3) Load & preprocess
     data_file = Path(data_csv)
     if not data_file.exists():
@@ -88,15 +122,31 @@ def PerceptronOptunaCPU(data_csv: str, use_weighted_bce: bool):
     stem = data_file.stem
     mode = "weightedBCE" if use_weighted_bce else "BCE"
 
+    # 5a) Custom metric function to avoid AutoGraph issues
+    def neg_recall_fn(yt, yp):
+        return (
+            tf.reduce_sum((1 - tf.cast(yt, tf.float32)) *
+                          (1 - tf.cast(yp > 0.5, tf.float32)))
+            / (tf.reduce_sum(1 - tf.cast(yt, tf.float32)) + K.epsilon())
+        )
+
     # 6) Objective with per-epoch logging & model save
     def objective(trial: optuna.Trial) -> float:
+        # Force GPU usage
+        if gpus:
+            with tf.device('/GPU:0'):
+                return _objective_impl(trial)
+        else:
+            return _objective_impl(trial)
+
+    def _objective_impl(trial: optuna.Trial) -> float:
         # pick index to pair dropout1 & dropout2
         idx       = trial.suggest_int("drop_idx", 0, len(drop1_values) - 1)
         dropout1  = drop1_values[idx]
         dropout2  = drop2_values[idx]
 
         h1  = trial.suggest_categorical("h1", h1_list)
-        lr  = trial.suggest_loguniform("lr", lr_list[0], lr_list[-1])
+        lr  = trial.suggest_float("lr", lr_list[0], lr_list[-1], log=True)
         bs  = trial.suggest_categorical("bs", bs_list)
         h2  = FIXED_H2
 
@@ -120,6 +170,15 @@ def PerceptronOptunaCPU(data_csv: str, use_weighted_bce: bool):
         if gpus:
             optimizer = mixed_precision.LossScaleOptimizer(optimizer)
 
+        print(f"\n🚀 Trial {trial.number} - TRAINING START")
+        print(f"   Architecture: Input({seq_len},{vocab_size}) → Dense({h1}) → Dense({FIXED_H2}) → Output(1)")
+        print(f"   Hyperparameters: LR={lr:.2e}, Batch={bs}, Dropout1={dropout1}, Dropout2={dropout2}")
+        print(f"   Dataset: {len(X_train)} train, {len(X_val)} validation samples")
+
+        # Show current device context
+        current_device = '/GPU:0' if gpus else '/CPU:0'
+        print(f"   Device context: {current_device}")
+
         model = tf.keras.Sequential([
             tf.keras.layers.Input((seq_len, vocab_size)),
             tf.keras.layers.Flatten(),
@@ -129,6 +188,10 @@ def PerceptronOptunaCPU(data_csv: str, use_weighted_bce: bool):
             tf.keras.layers.Dropout(dropout2),
             tf.keras.layers.Dense(1, activation="sigmoid", dtype="float32"),
         ])
+
+        # Build model to initialize weights
+        model.build((None, seq_len, vocab_size))
+
         model.compile(
             optimizer=optimizer,
             loss=loss_fn,
@@ -137,15 +200,20 @@ def PerceptronOptunaCPU(data_csv: str, use_weighted_bce: bool):
                 Precision(name="precision"),
                 Recall(name="recall"),
                 MeanMetricWrapper(
-                    lambda yt, yp: (
-                        tf.reduce_sum((1 - tf.cast(yt, tf.float32)) * # type: ignore
-                                      (1 - tf.cast(yp > 0.5, tf.float32))) # type: ignore
-                        / (tf.reduce_sum(1 - tf.cast(yt, tf.float32)) + K.epsilon()) # type: ignore
-                    ),
+                    neg_recall_fn,
                     name="neg_recall"
                 )
             ]
         )
+
+        # Check device placement after compilation
+        if len(model.weights) > 0:
+            weight_device = model.weights[0].device
+            device_type = "GPU" if "GPU" in str(weight_device) else "CPU"
+            print(f"   ✅ Model initialized on: {weight_device} ({device_type})")
+            print(f"   📊 Model parameters: {sum([tf.size(w).numpy() for w in model.weights]):,}")
+        else:
+            print("   ⚠️  Model has no weights")
 
         # dropout strings for filenames
         drop1_str = f"drop1{int(dropout1*100)}"
@@ -188,7 +256,9 @@ def PerceptronOptunaCPU(data_csv: str, use_weighted_bce: bool):
         load_if_exists=True
     )
     try:
-        study.optimize(objective, n_trials=50)
+        # Use fewer trials for testing
+        n_trials = 3 if os.environ.get('QUICK_TEST') == '1' else 50
+        study.optimize(objective, n_trials=n_trials, n_jobs=1)  # Force single job to avoid GPU context loss
     except KeyboardInterrupt:
         print("Interrupted, progress saved.")
 

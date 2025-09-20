@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from pandas.plotting import parallel_coordinates
 
 # 1) Path setup
 BASE_DIR   = Path(__file__).parent.resolve()
@@ -14,202 +15,189 @@ OUTPUT_DIR = BASE_DIR / "analysis_results"
 PLOTS_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# 2) Pattern for parsing log filenames (dataset может содержать "_", есть h2 и дропауты)
-LOG_PATTERN = re.compile(
-    r"(?P<dataset>.+?)_"
-    r"(?P<mode>[^_]+)_"
-    r"h1(?P<h1>\d+)_"
-    r"h2(?P<h2>\d+)_"
-    r"drop1(?P<drop1>\d+)_"
-    r"drop2(?P<drop2>\d+)_"
-    r"lr(?P<lr>[0-9eE\-\+\.]+)_"
-    r"bs(?P<bs>\d+)\.tsv$"
-)
+# 2) Filename patterns for CNN/Perceptron and RNN logs
+PATTERNS = [
+    re.compile(
+        r"(?P<dataset>.+?)_"
+        r"(?P<mode>[^_]+)_"
+        r"h1(?P<h1>\d+)_"
+        r"h2(?P<h2>\d+)_"
+        r"drop1(?P<drop1>\d+)_"
+        r"drop2(?P<drop2>\d+)_"
+        r"lr(?P<lr>[0-9eE\-\+\.]+)_"
+        r"bs(?P<bs>\d+)\.tsv$"
+    ),
+    re.compile(
+        r"(?P<dataset>.+?)_"
+        r"(?P<mode>[^_]+)_"
+        r"u(?P<h1>\d+)_"
+        r"dr(?P<drop1>\d+)_"
+        r"dd(?P<drop2>\d+)_"
+        r"lr(?P<lr>[0-9eE\-\+\.]+)_"
+        r"bs(?P<bs>\d+)\.tsv$"
+    ),
+]
+
+def parse_log_filename(name: str):
+    for pat in PATTERNS:
+        m = pat.match(name)
+        if not m:
+            continue
+        gd = m.groupdict()
+        gd.setdefault("h2", None)
+        return {
+            "dataset": gd["dataset"],
+            "mode":    gd["mode"],
+            "h1":      int(gd["h1"]),
+            "h2":      int(gd["h2"]) if gd["h2"] is not None else np.nan,
+            "drop1":   int(gd["drop1"]) / 100.0,
+            "drop2":   int(gd["drop2"]) / 100.0,
+            "lr":      float(gd["lr"]),
+            "bs":      int(gd["bs"])
+        }
+    return None
 
 records = []
 
-# 3) Collect records from logs
+# 3) Parse logs and collect best metrics
 for log_path in BASE_DIR.rglob("**/logs/*.tsv"):
-    fname = log_path.name
-    m = LOG_PATTERN.match(fname)
-    if not m:
-        print(f"Skip unparsed log: {fname}")
+    meta = parse_log_filename(log_path.name)
+    if meta is None:
         continue
 
-    gd = m.groupdict()
-    dataset = gd["dataset"]
-    mode    = gd["mode"]
-    h1      = int(gd["h1"])
-    h2      = int(gd["h2"])
-    drop1   = int(gd["drop1"]) / 100.0
-    drop2   = int(gd["drop2"]) / 100.0
-    lr      = float(gd["lr"])
-    bs      = int(gd["bs"])
+    # network name (folder above logs/)
+    network = log_path.parents[1].name
+    meta["network"] = network
 
-    # Extract the ratio directly from the dataset name
-    ratio_match = re.search(r"(\d+)-(\d+)", dataset)
+    # extract class imbalance ratio from dataset name
+    ratio_match = re.search(r"(\d+)-(\d+)", meta["dataset"])
     if not ratio_match:
-        print(f"Ratio not found in dataset name: {dataset}")
         continue
     neg, pos = map(int, ratio_match.groups())
-    ratio    = pos / neg
-
-    # network = folder one level above logs/
-    network  = log_path.parents[1].name
+    meta["neg"] = neg
+    meta["pos"] = pos
+    meta["ratio"] = pos / neg
 
     df = pd.read_csv(log_path, sep="\t")
-    if not {"epoch","val_recall","val_neg_recall"}.issubset(df.columns):
-        print(f"Missing cols in {fname}")
+    required = {"epoch", "val_recall", "val_neg_recall", "val_precision", "val_accuracy"}
+    if not required.issubset(df.columns):
         continue
 
+    # compute additional metrics
     df["balanced_acc"] = (df["val_recall"] + df["val_neg_recall"]) / 2
+    df["val_f1"] = 2 * df["val_recall"] * df["val_precision"] \
+                   / (df["val_recall"] + df["val_precision"] + 1e-8)
+
+    # select best epoch by balanced accuracy
     best = df.loc[df["balanced_acc"].idxmax()]
 
     records.append({
-        "dataset": dataset,
-        "network": network,
-        "neg": neg,
-        "pos": pos,
-        "ratio": ratio,
-        "mode": mode,
-        "h1": h1,
-        "h2": h2,
-        "drop1": drop1,
-        "drop2": drop2,
-        "lr": lr,
-        "bs": bs,
-        "best_epoch": int(best["epoch"]), # type: ignore
-        "best_val_recall": best["val_recall"],
-        "best_val_neg_recall": best["val_neg_recall"],
-        "best_balanced_acc": best["balanced_acc"]
+        **meta,
+        "best_epoch":           int(best["epoch"]),
+        "best_val_recall":      best["val_recall"],
+        "best_val_neg_recall":  best["val_neg_recall"],
+        "best_val_precision":   best["val_precision"],
+        "best_val_accuracy":    best["val_accuracy"],
+        "best_val_f1":          best["val_f1"],
+        "best_balanced_acc":    best["balanced_acc"]
     })
 
-# 4) DataFrame with all results
+# 4) Build DataFrame
 results = pd.DataFrame(records)
 if results.empty:
     print("No valid logs found. Exiting.")
     exit(1)
-results.to_csv(OUTPUT_DIR / "all_results.csv", index=False)
 
-# 5) Best per-network
-best_per_network = (
-    results
-    .loc[results.groupby("network")["best_balanced_acc"].idxmax()]
-    .reset_index(drop=True)
-)
-best_per_network.to_csv(OUTPUT_DIR / "best_per_network.csv", index=False)
+# 5) Save summary CSVs
+results.to_csv(OUTPUT_DIR / "all_results_extended.csv", index=False)
 
-# 6) Best per-dataset
-best_per_dataset = (
-    results
-    .loc[results.groupby("dataset")["best_balanced_acc"].idxmax()]
-    .reset_index(drop=True)
-)
-best_per_dataset.to_csv(OUTPUT_DIR / "best_per_dataset.csv", index=False)
+best_net = results.loc[results.groupby("network")["best_balanced_acc"].idxmax()]
+best_net.to_csv(OUTPUT_DIR / "best_per_network.csv", index=False)
 
-# 7) Overall best
-overall_best = results.loc[results["best_balanced_acc"].idxmax()]
-overall_best.to_frame().T.to_csv(OUTPUT_DIR / "overall_best.csv", index=False) # type: ignore
+best_ds = results.loc[results.groupby("dataset")["best_balanced_acc"].idxmax()]
+best_ds.to_csv(OUTPUT_DIR / "best_per_dataset.csv", index=False)
 
-# 8) Prepare for slope recording
-slope_records = []
+best_all = results.loc[results["best_balanced_acc"].idxmax()]
+best_all.to_frame().T.to_csv(OUTPUT_DIR / "overall_best.csv", index=False)
 
-# 9) Plot style
+top_k = results.nlargest(10, "best_balanced_acc")
+top_k.to_csv(OUTPUT_DIR / "top_10.csv", index=False)
+
+# 6) Plotting
 sns.set(style="whitegrid", font_scale=1.1)
 
-# 9.1 Best Balanced Accuracy per Network
+# Boxplot of best balanced accuracy per network
 plt.figure(figsize=(8, 4))
-sns.barplot(
-    data=best_per_network,
-    x="network", y="best_balanced_acc",
-    hue="network", palette="mako", dodge=False
-)
-plt.xticks(rotation=45)
+sns.boxplot(data=results, x="network", y="best_balanced_acc", palette="mako")
 plt.title("Best Balanced Accuracy per Network")
 plt.tight_layout()
-plt.savefig(PLOTS_DIR / "best_balanced_acc_per_network.png")
+plt.savefig(PLOTS_DIR / "balanced_acc_boxplot.png")
 plt.close()
 
-# 9.2 Class Imbalance vs Balanced Accuracy + slope
-plt.figure(figsize=(6, 4))
-sns.regplot(
-    data=results,
-    x="ratio", y="best_balanced_acc",
-    scatter_kws={"s":40,"alpha":0.7},
-    line_kws={"color":"red"}
+# Boxplot of best F1 score per network
+plt.figure(figsize=(8, 4))
+sns.boxplot(data=results, x="network", y="best_val_f1", palette="mako")
+plt.title("Best F1 Score per Network")
+plt.tight_layout()
+plt.savefig(PLOTS_DIR / "best_val_f1_boxplot.png")
+plt.close()
+
+# Pairplot of all hyperparameters vs balanced accuracy
+pair_cols = ["h1", "h2", "drop1", "drop2", "lr", "bs", "best_balanced_acc"]
+sns.pairplot(results[pair_cols + ["network"]], hue="network", diag_kind="hist")
+plt.savefig(PLOTS_DIR / "hyperparams_pairplot.png")
+plt.close()
+
+# Full correlation matrix
+num_cols = [
+    "h1", "h2", "drop1", "drop2", "lr", "bs",
+    "best_val_accuracy", "best_val_precision",
+    "best_val_recall", "best_val_neg_recall",
+    "best_val_f1", "best_balanced_acc"
+]
+corr = results[num_cols].corr()
+plt.figure(figsize=(8, 6))
+sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm")
+plt.title("Full Correlation Matrix")
+plt.tight_layout()
+plt.savefig(PLOTS_DIR / "full_corr_matrix.png")
+plt.close()
+
+# Analysis of common hyperparameters across all networks
+common = ["lr", "bs", "drop1", "drop2"]
+sns.pairplot(results[common + ["best_balanced_acc", "network"]],
+             hue="network", diag_kind="hist")
+plt.savefig(PLOTS_DIR / "common_hyperparams_pairplot.png")
+plt.close()
+
+plt.figure(figsize=(8, 6))
+parallel_coordinates(
+    results[["network"] + common],
+    "network",
+    colormap=sns.color_palette("mako", n_colors=results["network"].nunique())
 )
-plt.xlabel("Positive / Negative Ratio")
-plt.ylabel("Best Balanced Accuracy")
-plt.title("Class Imbalance vs Balanced Accuracy")
+plt.title("Parallel Coordinates of Common Hyperparameters")
 plt.tight_layout()
-plt.savefig(PLOTS_DIR / "ratio_vs_balanced_acc.png")
+plt.savefig(PLOTS_DIR / "common_params_parallel_coords.png")
 plt.close()
 
-slope_ratio,_ = np.polyfit(results["ratio"], results["best_balanced_acc"], 1)
-slope_ratio = round(slope_ratio, 8)
-slope_records.append({"plot_name":"ratio_vs_balanced_acc.png","slope":slope_ratio})
-
-# 9.3 Positive vs Negative Recall
-plt.figure(figsize=(6, 6))
-sns.scatterplot(
-    data=results,
-    x="best_val_recall", y="best_val_neg_recall",
-    hue="network", s=50
-)
-plt.plot([0,1],[0,1],"--",color="gray")
-plt.xlabel("Positive Recall")
-plt.ylabel("Negative Recall")
-plt.title("Positive vs Negative Recall")
-plt.legend(bbox_to_anchor=(1.05,1),loc="upper left")
-plt.tight_layout()
-plt.savefig(PLOTS_DIR / "recall_correlation.png")
-plt.close()
-
-# 9.4 Correlation matrix
-corr_matrix = results[["h1","h2","drop1","drop2","lr","bs","best_balanced_acc"]].corr()
-plt.figure(figsize=(6,5))
-sns.heatmap(corr_matrix,annot=True,cmap="coolwarm",fmt=".2f")
-plt.title("Correlation Matrix")
-plt.tight_layout()
-plt.savefig(PLOTS_DIR / "param_corr_matrix.png")
-plt.close()
-
-# 9.5 Scatter + linear trend for each tunable parameter
-for param in ["h1","h2","drop1","drop2","lr","bs"]:
-    plt.figure(figsize=(6,4))
-    sns.scatterplot(
-        data=results,
-        x=param, y="best_balanced_acc",
-        hue="mode", style="mode", s=50
-    )
-    for mode in results["mode"].unique():
-        subset = results[results["mode"]==mode]
-        if len(subset) > 1:
-            slope,_ = np.polyfit(subset[param], subset["best_balanced_acc"], 1)
-            slope = round(slope, 8)
-            slope_records.append({
-                "plot_name":f"{param}_vs_balanced_acc_by_mode_{mode}.png",
-                "slope": slope
-            })
-            sns.regplot(
-                data=subset,
-                x=param, y="best_balanced_acc",
-                scatter=False, label=f"{mode} trend"
-            )
-    plt.title(f"{param} vs Balanced Accuracy by Loss Mode")
-    plt.legend()
+# Per-network parameter ↔ metric correlation matrices
+perf_cols = [
+    "best_val_accuracy", "best_val_precision",
+    "best_val_recall", "best_val_neg_recall",
+    "best_val_f1", "best_balanced_acc"
+]
+for net in results["network"].unique():
+    sub = results[results["network"] == net]
+    param_cols = [c for c in ["h1", "h2", "drop1", "drop2", "lr", "bs"] if not sub[c].isna().all()]
+    m = sub[param_cols + perf_cols].corr()
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(m, annot=True, fmt=".2f", cmap="coolwarm")
+    plt.title(f"{net} Parameter↔Metric Correlation")
     plt.tight_layout()
-    plt.savefig(PLOTS_DIR / f"{param}_vs_balanced_acc_by_mode.png")
+    plt.savefig(PLOTS_DIR / f"{net.lower()}_corr_matrix.png")
     plt.close()
 
-# 10) Save slope summary to CSV
-slope_df = pd.DataFrame(slope_records)
-slope_df.to_csv(OUTPUT_DIR / "slope_summary.csv", index=False)
-
 print("Analysis complete!")
-print(f"- all_results.csv       at {OUTPUT_DIR/'all_results.csv'}")
-print(f"- best_per_network.csv  at {OUTPUT_DIR/'best_per_network.csv'}")
-print(f"- best_per_dataset.csv  at {OUTPUT_DIR/'best_per_dataset.csv'}")
-print(f"- overall_best.csv      at {OUTPUT_DIR/'overall_best.csv'}")
-print(f"- slope_summary.csv     at {OUTPUT_DIR/'slope_summary.csv'}")
-print(f"- plots directory       at {PLOTS_DIR}")
+print("Results CSVs in", OUTPUT_DIR)
+print("Plots in", PLOTS_DIR)
