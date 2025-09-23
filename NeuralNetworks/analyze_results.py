@@ -93,7 +93,7 @@ for log_path in BASE_DIR.rglob("**/logs/*.tsv"):
 
     records.append({
         **meta,
-        "best_epoch":           int(best["epoch"]),
+        "best_epoch":           int(best["epoch"]),  # type: ignore
         "best_val_recall":      best["val_recall"],
         "best_val_neg_recall":  best["val_neg_recall"],
         "best_val_precision":   best["val_precision"],
@@ -118,7 +118,7 @@ best_ds = results.loc[results.groupby("dataset")["best_balanced_acc"].idxmax()]
 best_ds.to_csv(OUTPUT_DIR / "best_per_dataset.csv", index=False)
 
 best_all = results.loc[results["best_balanced_acc"].idxmax()]
-best_all.to_frame().T.to_csv(OUTPUT_DIR / "overall_best.csv", index=False)
+best_all.to_frame().T.to_csv(OUTPUT_DIR / "overall_best.csv", index=False)  # type: ignore
 
 top_k = results.nlargest(10, "best_balanced_acc")
 top_k.to_csv(OUTPUT_DIR / "top_10.csv", index=False)
@@ -140,6 +140,42 @@ sns.boxplot(data=results, x="network", y="best_val_f1", palette="mako")
 plt.title("Best F1 Score per Network")
 plt.tight_layout()
 plt.savefig(PLOTS_DIR / "best_val_f1_boxplot.png")
+plt.close()
+
+# Boxplot of best balanced accuracy per loss function
+plt.figure(figsize=(8, 4))
+sns.boxplot(data=results, x="mode", y="best_balanced_acc", palette="viridis")
+plt.title("Best Balanced Accuracy per Loss Function")
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig(PLOTS_DIR / "balanced_acc_per_loss_boxplot.png")
+plt.close()
+
+# Boxplot of best F1 score per loss function
+plt.figure(figsize=(8, 4))
+sns.boxplot(data=results, x="mode", y="best_val_f1", palette="viridis")
+plt.title("Best F1 Score per Loss Function")
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig(PLOTS_DIR / "f1_per_loss_boxplot.png")
+plt.close()
+
+# Boxplot of best balanced accuracy per network and loss function
+plt.figure(figsize=(10, 6))
+sns.boxplot(data=results, x="network", y="best_balanced_acc", hue="mode", palette="viridis")
+plt.title("Best Balanced Accuracy per Network and Loss Function")
+plt.legend(title="Loss Function", bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.savefig(PLOTS_DIR / "balanced_acc_network_loss_boxplot.png")
+plt.close()
+
+# Violin plot of best F1 per loss function
+plt.figure(figsize=(8, 4))
+sns.violinplot(data=results, x="mode", y="best_val_f1", palette="viridis")
+plt.title("Distribution of Best F1 Score per Loss Function")
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig(PLOTS_DIR / "f1_per_loss_violin.png")
 plt.close()
 
 # Pairplot of all hyperparameters vs balanced accuracy
@@ -174,7 +210,7 @@ plt.figure(figsize=(8, 6))
 parallel_coordinates(
     results[["network"] + common],
     "network",
-    colormap=sns.color_palette("mako", n_colors=results["network"].nunique())
+    colormap="mako"
 )
 plt.title("Parallel Coordinates of Common Hyperparameters")
 plt.tight_layout()

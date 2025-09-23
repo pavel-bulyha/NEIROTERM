@@ -70,15 +70,17 @@ if __name__ == "__main__":
         print(f"No CSV files found under {train_root}")
         sys.exit(0)
 
+    loss_types = ["BCE", "weightedBCE", "balanced_accuracy", "focal"]
+
     for data_file in csv_files:
         print(f"\n=== Data file: {data_file} ===")
         for model_name in selected_models:
             run_fn = get_model(model_name)
-            for use_weighted in (False, True):
-                mode = "weightedBCE" if use_weighted else "BCE"
+            for loss_type in loss_types:
+                mode = loss_type
                 print(f"\n--- Running {model_name} [{mode}] ---")
                 try:
-                    results = run_fn(str(data_file), use_weighted)
+                    results = run_fn(str(data_file), loss_type)
                 except Exception as e:
                     print(f"Error running {model_name} on {data_file.name} [{mode}]: {e}")
                     continue

@@ -1,6 +1,6 @@
 # NEIROTERM
 
-A project for training and testing neural network models on sequences (e.g., bioinformatics, DNA/RNA classification).
+A project for training and testing neural network models on sequences.
 
 ## Project Structure
 
@@ -41,6 +41,8 @@ NeuralNetworks/
     ├── __init__.py
     ├── DataUtils.py
     ├── WeightedBCE.py
+    ├── balanced_accuracy.py
+    ├── focal_loss.py
     └── registry.py
 TrainData/
 ├── TrainData.7z
@@ -56,7 +58,7 @@ TrainData/
 - **pad_nucleotides.py** — script for padding nucleotide sequences to the same length.
 - **launcher.py** — entry point, automatically imports all models, displays available models with numbers, allows user to select specific models or run all, and runs selected models on all CSV files from the `../TrainData` folder.
 - **analyze_results.py** — advanced script for analyzing neural network training logs, supports multiple model architectures (CNN, Perceptron, RNN), generates comprehensive plots (boxplots, pairplots, correlation matrices, parallel coordinates) and detailed CSV reports with extended metrics (F1, balanced accuracy, precision, recall).
-- **analysis_plots/** — directory containing generated plots for visualizing analysis results: boxplots of balanced accuracy and F1 scores, hyperparameter pairplots, correlation matrices, and parallel coordinates for parameter analysis.
+- **analysis_plots/** — directory containing generated plots for visualizing analysis results: boxplots of balanced accuracy and F1 scores per network and loss function, violin plots, hyperparameter pairplots, correlation matrices, and parallel coordinates for parameter analysis.
 - **analysis_results/** — directory with CSV files containing aggregated analysis data: extended results, best per network, best per dataset, overall best configuration, and top 10 results.
 - **ConvolutionalNeuralNetwork/** — implementation of Convolutional Neural Network (CNN) for sequence classification with intelligent parameter filtering and cuDNN support.
 - **FullyConnectedPerceptron/** — implementation of Multi-Layer Perceptron (MLP) model for binary classification.
@@ -64,6 +66,8 @@ TrainData/
 - **utils/** — auxiliary modules:
   - `DataUtils.py` — data preparation and encoding.
   - `WeightedBCE.py` — weighted BCE loss function for handling imbalanced classes.
+  - `balanced_accuracy.py` — balanced accuracy loss function.
+  - `focal_loss.py` — focal loss function for hard examples.
   - `registry.py` — model registry (decorator for registering entry points).
 
 ## Adding Your Own Model
@@ -75,7 +79,7 @@ TrainData/
 from utils import register_model
 
 @register_model("MyModel")
-def MyModelRUN(data_csv: str, use_weighted_bce: bool):
+def MyModelRUN(data_csv: str, loss_type: str):
     # Your training logic
     return {"accuracy": ..., "precision": ...}
 ```
@@ -125,7 +129,7 @@ python launcher.py
 ```
 
 - The script will automatically find all registered models, display them with numbers, and prompt the user to select specific models (by entering numbers separated by ';') or run all (by entering 'all').
-- Selected models will be run on all CSV files (including nested ones) from the `../TrainData` folder, with two loss function modes: standard BCE and weighted BCE (`pos_weight = neg / pos`).
+- Selected models will be run on all CSV files (including nested ones) from the `../TrainData` folder, with four loss function modes: BCE, weighted BCE (`pos_weight = neg / pos`), balanced accuracy, and focal loss.
 - For each model and each file, training logs (TSV) and weights (H5) are saved in the corresponding model folder.
 - In case of errors (e.g., missing data or model), an informative message is displayed.
 

@@ -11,7 +11,7 @@ from tensorflow.keras.callbacks import CSVLogger # type: ignore
 from tensorflow.keras import mixed_precision, backend as K # type: ignore
 from tensorflow.data import AUTOTUNE # type: ignore
 
-from utils import DataUtils, weighted_BCE, register_model
+from utils import DataUtils, weighted_BCE, balanced_accuracy_loss, focal_loss, register_model
 from optuna.pruners import MedianPruner
 from optuna.exceptions import TrialPruned
 
@@ -58,7 +58,7 @@ def neg_recall_metric(yt, yp):
     )
 
 @register_model("CNNOptunaOriginal")
-def CNNOptunaCPU(data_csv: str, use_weighted_bce: bool):
+def CNNOptunaCPU(data_csv: str, loss_type: str):
     print("\n" + "="*60)
     print("🎥 CNN GPU INITIALIZATION")
     print("="*60)
@@ -94,7 +94,7 @@ def CNNOptunaCPU(data_csv: str, use_weighted_bce: bool):
         print("   - Training will use CPU")
         print("   - Performance may be slower")
 
-    print(f"\n🎯 Training mode: {'Weighted BCE' if use_weighted_bce else 'Standard BCE'}")
+    print(f"\n🎯 Loss function: {loss_type}")
     print("="*60 + "\n")
 
     # 3) Load & preprocess
@@ -110,13 +110,17 @@ def CNNOptunaCPU(data_csv: str, use_weighted_bce: bool):
     X_train, X_val, y_train, y_val = proc.get_processed_data()
 
     # 4) Loss fn
-    if use_weighted_bce:
+    if loss_type == "BCE":
+        loss_fn = "binary_crossentropy"
+    elif loss_type == "weightedBCE":
         labels = y_train.numpy().flatten() # type: ignore
         neg, pos   = np.bincount(labels, minlength=2)
         pos_weight = neg / (pos + K.epsilon())
         loss_fn    = weighted_BCE(pos_weight)
-    else:
-        loss_fn = "binary_crossentropy"
+    elif loss_type == "balanced_accuracy":
+        loss_fn = balanced_accuracy_loss()
+    elif loss_type == "focal":
+        loss_fn = focal_loss()
 
     # 5) Hyper-space & dirs
     bs_list = [16, 32, 64, 128]
@@ -127,13 +131,13 @@ def CNNOptunaCPU(data_csv: str, use_weighted_bce: bool):
     models_dir.mkdir(exist_ok=True, parents=True)
 
     stem = data_file.stem
-    mode = "weightedBCE" if use_weighted_bce else "BCE"
+    mode = loss_type
 
     # 6) Objective with per-epoch logging & model save
     def objective(trial: optuna.Trial) -> float:
         # Force GPU usage
         if gpus:
-            with tf.device('/GPU:0'):
+            with tf.device('/GPU:0'):  # type: ignore
                 return _objective_impl(trial)
         else:
             return _objective_impl(trial)
@@ -219,7 +223,7 @@ def CNNOptunaCPU(data_csv: str, use_weighted_bce: bool):
             weight_device = model.weights[0].device
             device_type = "GPU" if "GPU" in str(weight_device) else "CPU"
             print(f"   ✅ Model initialized on: {weight_device} ({device_type})")
-            print(f"   📊 Model parameters: {sum([tf.size(w).numpy() for w in model.weights]):,}")
+            print(f"   📊 Model parameters: {sum([tf.size(w).numpy() for w in model.weights]):,}")  # type: ignore
         else:
             print("   ⚠️  Model has no weights")
 
