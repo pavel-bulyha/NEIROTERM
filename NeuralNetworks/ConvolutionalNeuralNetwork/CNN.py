@@ -220,9 +220,7 @@ def CNNOptunaCPU(data_csv: str, loss_type: str):
 
         # Check device placement after compilation
         if len(model.weights) > 0:
-            weight_device = model.weights[0].device
-            device_type = "GPU" if "GPU" in str(weight_device) else "CPU"
-            print(f"   ✅ Model initialized on: {weight_device} ({device_type})")
+            print(f"   ✅ Model initialized on: {current_device}")
             print(f"   📊 Model parameters: {sum([tf.size(w).numpy() for w in model.weights]):,}")  # type: ignore
         else:
             print("   ⚠️  Model has no weights")

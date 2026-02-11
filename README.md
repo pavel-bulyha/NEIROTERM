@@ -1,6 +1,6 @@
-# NEIROTERM
+# NeiroTerm V1.1.1
 
-A project for training and testing neural network models on sequences.
+A project for training and testing neural network models on sequences. This version is compatible with Linux systems and TensorFlow 2.20.0+.
 
 ## Project Structure
 
@@ -90,12 +90,11 @@ def MyModelRUN(data_csv: str, loss_type: str):
 Minimal set of commands to run:
 
 ```bash
-git clone https://github.com/pavel-bulyha/NEIROTERM.git
+# Clone the latest stable version (V1.1.1)
+git clone -b linux https://github.com/pavel-bulyha/NEIROTERM.git
 cd NEIROTERM
 python -m venv .venv
-source .venv/bin/activate      # on Unix/Mac
-# or
-.\.venv\Scripts\activate       # on Windows
+source .venv/bin/activate
 pip install -r requirements.txt
 python NeuralNetworks/launcher.py
 ```
@@ -187,12 +186,17 @@ python analyze_results.py
 
 - The script analyzes all training logs from model subfolders, generates plots and CSV reports in `analysis_plots/` and `analysis_results/`.
 
+## System Requirements
+
+- **Linux**
+- **Python 3.10-3.13**
+- **GPU with CUDA support** (optional)
+- **TensorFlow 2.20.0+**
+
 ## Dependencies
 
-Python >= 3.8
-
 Required packages:
-- tensorflow == 2.10.0     # core ML framework with Keras API, GPU support
+- tensorflow >= 2.20.0     # core ML framework with Keras API, GPU support
 - numpy >= 1.23.0          # vectorized operations and matrix math
 - pandas >= 1.5.0          # CSV parsing and data handling
 - scikit-learn >= 1.3.0    # preprocessing, metrics, data balancing
@@ -208,8 +212,7 @@ pip install -r requirements.txt
 ## Recommended: use a virtual environment to isolate dependencies
 ```bash
 python -m venv .venv
-source .venv/bin/activate      # on Unix/Mac
-.\.venv\Scripts\activate       # on Windows
+source .venv/bin/activate
 ```
 
 ## GPU Support
@@ -222,19 +225,22 @@ The project includes comprehensive GPU support with automatic fallback:
 
 All models automatically detect GPUs, configure memory, and use mixed precision for performance.
 
-## CUDA Diagnostics
+## CUDA Requirements
 
-For CUDA setup diagnostics, run:
+For GPU support with TensorFlow 2.20.0+:
 
+- **CUDA Toolkit 12.x**
+- **cuDNN 9.x**
+- **NVIDIA Driver 550+**
+
+Check CUDA version:
 ```bash
-# Check CUDA version
 nvcc --version
+```
 
-# Check GPU devices
+Check GPU devices:
+```bash
 python -c "import tensorflow as tf; print('GPU devices:', len(tf.config.list_physical_devices('GPU')))"
-
-# Check CUDA environment variables
-echo $env:CUDA_PATH
 ```
 
 ## Example Output
@@ -282,8 +288,7 @@ Selected models: ['CNNOptunaOriginal', 'PerceptronOptuna']
 - **Model import errors**: Ensure all model files are in correct subfolders and contain the `@register_model` decorator.
 
 ### GPU/CUDA Errors
-- **"cudnn_ops_infer64_8.dll not found" or similar**: Update NVIDIA drivers, CUDA Toolkit, and cuDNN to versions compatible with TensorFlow 2.10.0. Check the `CUDA_PATH` variable.
-- **GPU not detected**: The model will automatically switch to CPU. Check TensorFlow-GPU installation.
+- **GPU not detected**: The model will automatically switch to CPU. Install CUDA Toolkit 12.x and cuDNN 9.x for GPU support.
 - **Out of memory on GPU**: Reduce batch size or disable mixed precision.
 
 ### Other Issues
