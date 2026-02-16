@@ -168,15 +168,26 @@ python launcher.py
 ### Analysis Reports
 - **Location**: `NeuralNetworks/analysis_results/`
 - **Files**:
-  - `all_results_extended.csv` — all results with metrics
-  - `best_per_network.csv` — best per network
-  - `best_per_dataset.csv` — best per dataset
-  - `overall_best.csv` — overall best
-  - `top_10.csv` — top 10 results
+  - `all_results_extended.csv` — all training results with extended metrics including balanced accuracy, F1-score, precision, recall for both classes. Contains hyperparameters (h1, h2, dropout rates, learning rate, batch size) and network name for each experiment.
+  - `best_per_network.csv` — best performing configuration for each network architecture (CNN, Perceptron, RNN) based on balanced accuracy metric.
+  - `best_per_dataset.csv` — best configuration for each dataset based on balanced accuracy metric.
+  - `overall_best.csv` — single best configuration across all networks and datasets.
+  - `top_10.csv` — top 10 experiments with highest balanced accuracy.
 
 ### Analysis Plots
 - **Location**: `NeuralNetworks/analysis_plots/`
-- **Files**: PNG plots (boxplots, pairplots, correlation matrices, parallel coordinates)
+- **Generated plots**:
+  - `balanced_acc_boxplot.png` — boxplot comparing balanced accuracy across different neural network architectures (CNN, Perceptron, RNN). Shows distribution of best results and outliers for each network type.
+  - `best_val_f1_boxplot.png` — boxplot comparing F1-score across network architectures.
+  - `balanced_acc_per_loss_boxplot.png` — boxplot showing balanced accuracy for different loss functions (BCE, weighted BCE, balanced accuracy, focal loss). Helps identify which loss function works best for the imbalanced classification problem.
+  - `f1_per_loss_boxplot.png` — boxplot showing F1-score for different loss functions.
+  - `balanced_acc_network_loss_boxplot.png` — combined boxplot showing balanced accuracy across both network architectures and loss functions, allowing comparison of network-loss combinations.
+  - `f1_per_loss_violin.png` — violin plot showing full distribution of F1-scores for each loss function, including density estimation. Shows how F1 varies between experiments for each loss type.
+  - `hyperparams_pairplot.png` — pairplot of all hyperparameters (h1, h2, drop1, drop2, lr, bs) vs balanced accuracy, colored by network type. Shows correlations between hyperparameters and performance.
+  - `common_hyperparams_pairplot.png` — pairplot for common hyperparameters (lr, bs, drop1, drop2) across all networks.
+  - `common_params_parallel_coordinates.png` — parallel coordinates plot showing how different hyperparameter configurations relate to network types.
+  - `full_corr_matrix.png` — correlation heatmap showing relationships between all hyperparameters and performance metrics (accuracy, precision, recall, F1, balanced accuracy).
+  - `[network]_corr_matrix.png` — separate correlation matrices for each network type (convolutionalneuralnetwork_corr_matrix.png, fullyconnectedperceptron_corr_matrix.png, recurrentneuralnetwork_corr_matrix.png), showing parameter-metric correlations specific to each architecture.
 
 ## Analyzing Results
 
